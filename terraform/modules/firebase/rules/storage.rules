@@ -1,0 +1,23 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function role() {
+      return request.auth.token.role;
+    }
+
+    function canUploadAgreement() {
+      return isAuthenticated() && (role() == 'admin' || role() == 'super_admin');
+    }
+
+    match /builder_agreements/{builderId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if canUploadAgreement()
+                   && request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType.matches('application/pdf|application/msword|application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    }
+  }
+}

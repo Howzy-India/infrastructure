@@ -1,0 +1,4 @@
+# Prod environment
+# Copy to terraform.tfvars and fill in values
+project_id = "howzy-prod"
+region     = "asia-south1"

@@ -1,0 +1,4 @@
+# Dev environment
+# Copy to terraform.tfvars and fill in values
+project_id = "howzy-dev"
+region     = "asia-south1"

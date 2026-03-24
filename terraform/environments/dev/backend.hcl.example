@@ -1,0 +1,3 @@
+# GCS backend for dev
+bucket = "howzy-dev-tfstate"
+prefix = "firebase"

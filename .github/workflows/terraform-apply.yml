@@ -1,0 +1,230 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches:
+      - dev
+      - qa
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-apply.yml"
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+      run_apply:
+        description: "Apply after plan"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_env || (github.ref_name == 'main' && 'prod' || github.ref_name) }}
+  cancel-in-progress: false
+
+jobs:
+  resolve_context:
+    name: Resolve target environment
+    runs-on: ubuntu-latest
+    outputs:
+      target_env: ${{ steps.resolve.outputs.target_env }}
+      run_apply: ${{ steps.resolve.outputs.run_apply }}
+
+    steps:
+      - name: Resolve branch to environment
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRANCH="${GITHUB_REF_NAME}"
+
+          branch_to_env() {
+            case "$1" in
+              dev) echo "dev" ;;
+              qa) echo "qa" ;;
+              main) echo "prod" ;;
+              *) echo "" ;;
+            esac
+          }
+
+          MAPPED_ENV="$(branch_to_env "${BRANCH}")"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            if [[ -z "${MAPPED_ENV}" ]]; then
+              echo "Unsupported branch for push trigger: ${BRANCH}" >&2
+              exit 1
+            fi
+            TARGET_ENV="${MAPPED_ENV}"
+            RUN_APPLY="true"
+          else
+            TARGET_ENV="${{ github.event.inputs.target_env }}"
+            RUN_APPLY="${{ github.event.inputs.run_apply }}"
+
+            if [[ -n "${MAPPED_ENV}" && "${TARGET_ENV}" != "${MAPPED_ENV}" ]]; then
+              echo "Branch ${BRANCH} can only target ${MAPPED_ENV}. Requested: ${TARGET_ENV}" >&2
+              exit 1
+            fi
+          fi
+
+          echo "target_env=${TARGET_ENV}" >> "$GITHUB_OUTPUT"
+          echo "run_apply=${RUN_APPLY}" >> "$GITHUB_OUTPUT"
+
+  plan:
+    name: Terraform Plan (${{ needs.resolve_context.outputs.target_env }})
+    runs-on: ubuntu-latest
+    needs: resolve_context
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_TERRAFORM_SA }}
+
+      - name: Write backend and tfvars files
+        shell: bash
+        env:
+          TFVARS_DEV: ${{ secrets.TFVARS_DEV }}
+          TFVARS_QA: ${{ secrets.TFVARS_QA }}
+          TFVARS_PROD: ${{ secrets.TFVARS_PROD }}
+        run: |
+          set -euo pipefail
+          TARGET_ENV="${{ needs.resolve_context.outputs.target_env }}"
+          ENV_DIR="terraform/environments/${TARGET_ENV}"
+
+          case "${TARGET_ENV}" in
+            dev)
+              TFSTATE_BUCKET="${{ secrets.TFSTATE_BUCKET_DEV }}"
+              TFVARS_CONTENT="${TFVARS_DEV}"
+              ;;
+            qa)
+              TFSTATE_BUCKET="${{ secrets.TFSTATE_BUCKET_QA }}"
+              TFVARS_CONTENT="${TFVARS_QA}"
+              ;;
+            prod)
+              TFSTATE_BUCKET="${{ secrets.TFSTATE_BUCKET_PROD }}"
+              TFVARS_CONTENT="${TFVARS_PROD}"
+              ;;
+            *)
+              echo "Unsupported environment"
+              exit 1
+              ;;
+          esac
+
+          cat > "${ENV_DIR}/backend.hcl" <<EOF
+          bucket = "${TFSTATE_BUCKET}"
+          prefix = "terraform/state/${TARGET_ENV}"
+          EOF
+
+          printf "%s" "${TFVARS_CONTENT}" > "${ENV_DIR}/terraform.tfvars"
+
+      - name: Terraform init
+        run: terraform -chdir=terraform/environments/${{ needs.resolve_context.outputs.target_env }} init -backend-config=backend.hcl
+
+      - name: Terraform plan
+        run: terraform -chdir=terraform/environments/${{ needs.resolve_context.outputs.target_env }} plan -out=tfplan
+
+      - name: Stage plan artifact
+        shell: bash
+        run: cp terraform/environments/${{ needs.resolve_context.outputs.target_env }}/tfplan ./tfplan.bin
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: tfplan.bin
+
+  apply:
+    name: Terraform Apply (${{ needs.resolve_context.outputs.target_env }})
+    runs-on: ubuntu-latest
+    needs: [resolve_context, plan]
+    if: "${{ needs.resolve_context.outputs.run_apply == 'true' }}"
+    environment: ${{ needs.resolve_context.outputs.target_env }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_TERRAFORM_SA }}
+
+      - name: Write backend and tfvars files
+        shell: bash
+        env:
+          TFVARS_DEV: ${{ secrets.TFVARS_DEV }}
+          TFVARS_QA: ${{ secrets.TFVARS_QA }}
+          TFVARS_PROD: ${{ secrets.TFVARS_PROD }}
+        run: |
+          set -euo pipefail
+          TARGET_ENV="${{ needs.resolve_context.outputs.target_env }}"
+          ENV_DIR="terraform/environments/${TARGET_ENV}"
+
+          case "${TARGET_ENV}" in
+            dev)
+              TFSTATE_BUCKET="${{ secrets.TFSTATE_BUCKET_DEV }}"
+              TFVARS_CONTENT="${TFVARS_DEV}"
+              ;;
+            qa)
+              TFSTATE_BUCKET="${{ secrets.TFSTATE_BUCKET_QA }}"
+              TFVARS_CONTENT="${TFVARS_QA}"
+              ;;
+            prod)
+              TFSTATE_BUCKET="${{ secrets.TFSTATE_BUCKET_PROD }}"
+              TFVARS_CONTENT="${TFVARS_PROD}"
+              ;;
+            *)
+              echo "Unsupported environment"
+              exit 1
+              ;;
+          esac
+
+          cat > "${ENV_DIR}/backend.hcl" <<EOF
+          bucket = "${TFSTATE_BUCKET}"
+          prefix = "terraform/state/${TARGET_ENV}"
+          EOF
+
+          printf "%s" "${TFVARS_CONTENT}" > "${ENV_DIR}/terraform.tfvars"
+
+      - name: Terraform init
+        run: terraform -chdir=terraform/environments/${{ needs.resolve_context.outputs.target_env }} init -backend-config=backend.hcl
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: .
+
+      - name: Restore plan artifact
+        shell: bash
+        run: mv ./tfplan.bin terraform/environments/${{ needs.resolve_context.outputs.target_env }}/tfplan
+
+      - name: Terraform apply
+        run: terraform -chdir=terraform/environments/${{ needs.resolve_context.outputs.target_env }} apply -auto-approve tfplan

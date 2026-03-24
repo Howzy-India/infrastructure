@@ -1,0 +1,3 @@
+# GCS backend for prod
+bucket = "howzy-prod-tfstate"
+prefix = "firebase"

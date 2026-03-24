@@ -1,0 +1,51 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - qa
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+      - ".github/workflows/terraform-apply.yml"
+  push:
+    branches:
+      - dev
+      - qa
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+      - ".github/workflows/terraform-apply.yml"
+
+jobs:
+  fmt_validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env_dir: [dev, qa, prod]
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive terraform
+
+      - name: Terraform init (no backend)
+        run: terraform -chdir=terraform/environments/${{ matrix.env_dir }} init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir=terraform/environments/${{ matrix.env_dir }} validate

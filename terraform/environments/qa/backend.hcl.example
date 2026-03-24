@@ -1,0 +1,3 @@
+# GCS backend for qa
+bucket = "howzy-qa-tfstate"
+prefix = "firebase"

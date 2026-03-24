@@ -1,0 +1,4 @@
+# QA environment
+# Copy to terraform.tfvars and fill in values
+project_id = "howzy-qa"
+region     = "asia-south1"

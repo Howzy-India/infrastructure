@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function role() {
+      return request.auth.token.role;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && role() == 'super_admin';
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && role() == 'admin';
+    }
+
+    function isAgent() {
+      return isAuthenticated() && role() == 'agent';
+    }
+
+    match /users/{uid} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    match /builders/{builderId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || isSuperAdmin();
+      allow update: if isAdmin() || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+
+      match /agreements/{agreementId} {
+        allow read: if isAuthenticated();
+        allow create: if isAdmin() || isSuperAdmin();
+        allow update, delete: if false;
+      }
+    }
+
+    match /approvals/{approvalId} {
+      allow read: if isAdmin() || isSuperAdmin();
+      allow create: if isAdmin() || isSuperAdmin();
+      allow update: if isSuperAdmin();
+      allow delete: if false;
+    }
+
+    match /projects/{projectId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isSuperAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isSuperAdmin();
+      allow create: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /leads/{leadId} {
+      // Public form submissions; reads restricted to authenticated staff
+      allow read: if isAuthenticated();
+      allow create: if true;
+      allow update: if isAdmin() || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || isSuperAdmin();
+      allow update: if isAdmin() || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /submissions/{submissionId} {
+      // Public property submissions; status updates restricted to admin
+      allow read: if isAuthenticated();
+      allow create: if true;
+      allow update: if isAdmin() || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /enquiries/{enquiryId} {
+      // Public enquiry submissions; assignments and status updates restricted to admin
+      allow read: if isAuthenticated();
+      allow create: if true;
+      allow update: if isAdmin() || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /enquiry_timeline/{timelineId} {
+      // Timeline entries auto-created by backend during enquiry operations
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /clientLogins/{loginId} {
+      // Sensitive login tracking; writes are public (login events), reads restricted
+      allow read: if isAdmin() || isSuperAdmin();
+      allow create: if true;
+      allow update: if false;
+      allow delete: if isSuperAdmin();
+    }
+  }
+}
